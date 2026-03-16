@@ -1,0 +1,168 @@
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+class VideoData {
+    String id;
+    String content;
+
+    public VideoData(String id, String content) {
+        this.id = id;
+        this.content = content;
+    }
+}
+
+class CacheMetrics {
+    AtomicLong hits = new AtomicLong(0);
+    AtomicLong misses = new AtomicLong(0);
+    AtomicLong totalTimeNs = new AtomicLong(0);
+
+    public void recordHit(long timeNs) {
+        hits.incrementAndGet();
+        totalTimeNs.addAndGet(timeNs);
+    }
+
+    public void recordMiss(long timeNs) {
+        misses.incrementAndGet();
+        totalTimeNs.addAndGet(timeNs);
+    }
+}
+
+public class MultiLevelCache {
+
+    private final int l1Capacity;
+    private final int l2Capacity;
+    private final int promotionThreshold;
+
+    private final Map<String, VideoData> l1Cache;
+    private final Map<String, String> l2Cache;
+    private final Map<String, Integer> accessCounts;
+
+    private final CacheMetrics l1Metrics = new CacheMetrics();
+    private final CacheMetrics l2Metrics = new CacheMetrics();
+    private final CacheMetrics l3Metrics = new CacheMetrics();
+
+    public MultiLevelCache(int l1Capacity, int l2Capacity, int promotionThreshold) {
+        this.l1Capacity = l1Capacity;
+        this.l2Capacity = l2Capacity;
+        this.promotionThreshold = promotionThreshold;
+
+        this.l1Cache = new LinkedHashMap<String, VideoData>(l1Capacity, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, VideoData> eldest) {
+                return size() > MultiLevelCache.this.l1Capacity;
+            }
+        };
+
+        this.l2Cache = new LinkedHashMap<String, String>(l2Capacity, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, String> eldest) {
+                return size() > MultiLevelCache.this.l2Capacity;
+            }
+        };
+
+        this.accessCounts = new ConcurrentHashMap<>();
+    }
+
+    public VideoData getVideo(String videoId) {
+        long start = System.nanoTime();
+        
+        VideoData video = l1Cache.get(videoId);
+        if (video != null) {
+            long duration = System.nanoTime() - start;
+            l1Metrics.recordHit(duration);
+            System.out.println("-> L1 Cache HIT");
+            return video;
+        }
+        l1Metrics.recordMiss(System.nanoTime() - start);
+        System.out.println("-> L1 Cache MISS");
+
+        start = System.nanoTime();
+        String l2Path = l2Cache.get(videoId);
+        if (l2Path != null) {
+            long duration = System.nanoTime() - start;
+            l2Metrics.recordHit(duration);
+            System.out.println("-> L2 Cache HIT");
+            
+            handlePromotion(videoId, l2Path);
+            return new VideoData(videoId, "Content from " + l2Path);
+        }
+        l2Metrics.recordMiss(System.nanoTime() - start);
+        System.out.println("-> L2 Cache MISS");
+
+        start = System.nanoTime();
+        video = fetchFromDatabase(videoId);
+        long duration = System.nanoTime() - start;
+        l3Metrics.recordHit(duration);
+        System.out.println("-> L3 Database HIT");
+
+        l2Cache.put(videoId, "/ssd/videos/" + videoId + ".mp4");
+        accessCounts.put(videoId, 1);
+        System.out.println("-> Added to L2 (access count: 1)");
+
+        return video;
+    }
+
+    private void handlePromotion(String videoId, String l2Path) {
+        int count = accessCounts.getOrDefault(videoId, 0) + 1;
+        accessCounts.put(videoId, count);
+        
+        if (count >= promotionThreshold) {
+            l1Cache.put(videoId, new VideoData(videoId, "Content from " + l2Path));
+            System.out.println("-> Promoted to L1");
+        }
+    }
+
+    private VideoData fetchFromDatabase(String videoId) {
+        try {
+            Thread.sleep(150);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return new VideoData(videoId, "Content from Database");
+    }
+
+    public void getStatistics() {
+        printMetrics("L1", l1Metrics);
+        printMetrics("L2", l2Metrics);
+        printMetrics("L3", l3Metrics);
+
+        long totalHits = l1Metrics.hits.get() + l2Metrics.hits.get() + l3Metrics.hits.get();
+        long totalQueries = totalHits; 
+        long totalTimeNs = l1Metrics.totalTimeNs.get() + l2Metrics.totalTimeNs.get() + l3Metrics.totalTimeNs.get();
+
+        if (totalQueries > 0) {
+            double hitRate = (totalHits * 100.0) / totalQueries;
+            double avgTimeMs = (totalTimeNs / (double) totalQueries) / 1_000_000.0;
+            System.out.printf("Overall: Hit Rate %.0f%%, Avg Time: %.2fms%n", hitRate, avgTimeMs);
+        }
+    }
+
+    private void printMetrics(String level, CacheMetrics metrics) {
+        long totalAttempts = metrics.hits.get() + metrics.misses.get();
+        if (totalAttempts == 0) return;
+
+        double hitRate = (metrics.hits.get() * 100.0) / totalAttempts;
+        double avgTimeMs = metrics.hits.get() > 0 ? 
+            (metrics.totalTimeNs.get() / (double) metrics.hits.get()) / 1_000_000.0 : 0.0;
+
+        System.out.printf("%s: Hit Rate %.0f%%, Avg Time: %.2fms%n", level, hitRate, avgTimeMs);
+    }
+
+    public static void main(String[] args) {
+        MultiLevelCache cache = new MultiLevelCache(2, 5, 2);
+
+        System.out.println("getVideo(\"video_123\")");
+        cache.getVideo("video_123");
+        
+        System.out.println("\ngetVideo(\"video_123\") [second request]");
+        cache.getVideo("video_123");
+        
+        System.out.println("\ngetVideo(\"video_999\")");
+        cache.getVideo("video_999");
+        
+        System.out.println("\ngetStatistics() ->");
+        cache.getStatistics();
+    }
+}
