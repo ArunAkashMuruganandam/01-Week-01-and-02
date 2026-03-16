@@ -1,0 +1,115 @@
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+
+class TrieNode {
+    Map<Character, TrieNode> children;
+    boolean isEndOfWord;
+    String word;
+
+    public TrieNode() {
+        children = new HashMap<>();
+        isEndOfWord = false;
+        word = null;
+    }
+}
+
+class QueryStats implements Comparable<QueryStats> {
+    String query;
+    int frequency;
+
+    public QueryStats(String query, int frequency) {
+        this.query = query;
+        this.frequency = frequency;
+    }
+
+    @Override
+    public int compareTo(QueryStats other) {
+        if (this.frequency == other.frequency) {
+            return other.query.compareTo(this.query);
+        }
+        return Integer.compare(this.frequency, other.frequency);
+    }
+}
+
+public class AutocompleteSystem {
+    private final TrieNode root;
+    private final Map<String, Integer> globalFrequencies;
+
+    public AutocompleteSystem() {
+        this.root = new TrieNode();
+        this.globalFrequencies = new HashMap<>();
+    }
+
+    public void updateFrequency(String query, int increment) {
+        globalFrequencies.put(query, globalFrequencies.getOrDefault(query, 0) + increment);
+        
+        TrieNode current = root;
+        for (char c : query.toCharArray()) {
+            current.children.putIfAbsent(c, new TrieNode());
+            current = current.children.get(c);
+        }
+        current.isEndOfWord = true;
+        current.word = query;
+    }
+
+    public List<String> search(String prefix) {
+        TrieNode current = root;
+        for (char c : prefix.toCharArray()) {
+            if (!current.children.containsKey(c)) {
+                return new ArrayList<>();
+            }
+            current = current.children.get(c);
+        }
+
+        PriorityQueue<QueryStats> minHeap = new PriorityQueue<>(10);
+        collectTopQueries(current, minHeap);
+
+        List<String> results = new ArrayList<>();
+        while (!minHeap.isEmpty()) {
+            results.add(0, minHeap.poll().query);
+        }
+        return results;
+    }
+
+    private void collectTopQueries(TrieNode node, PriorityQueue<QueryStats> minHeap) {
+        if (node == null) return;
+
+        if (node.isEndOfWord) {
+            minHeap.offer(new QueryStats(node.word, globalFrequencies.get(node.word)));
+            if (minHeap.size() > 10) {
+                minHeap.poll();
+            }
+        }
+
+        for (TrieNode child : node.children.values()) {
+            collectTopQueries(child, minHeap);
+        }
+    }
+
+    public static void main(String[] args) {
+        AutocompleteSystem autocomplete = new AutocompleteSystem();
+        
+        autocomplete.updateFrequency("javascript", 987654);
+        autocomplete.updateFrequency("java tutorial", 1234567);
+        autocomplete.updateFrequency("java download", 456789);
+        autocomplete.updateFrequency("java 21 features", 1);
+        
+        System.out.println("search(\"jav\") ->");
+        List<String> results = autocomplete.search("jav");
+        int rank = 1;
+        for (String res : results) {
+            String suffix = res.substring("jav".length());
+            System.out.println(rank + ". \"" + suffix + "\" (" + autocomplete.globalFrequencies.get(res) + " searches)");
+            rank++;
+        }
+
+        System.out.print("\nupdateFrequency(\"java 21 features\") -> Frequency: 1");
+        autocomplete.updateFrequency("java 21 features", 1);
+        System.out.print(" -> " + autocomplete.globalFrequencies.get("java 21 features"));
+        autocomplete.updateFrequency("java 21 features", 1);
+        System.out.println(" -> " + autocomplete.globalFrequencies.get("java 21 features") + " (trending)");
+    }
+}
