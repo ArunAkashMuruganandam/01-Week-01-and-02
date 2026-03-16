@@ -1,0 +1,101 @@
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public class PlagiarismDetector {
+
+    private final int nGramSize;
+    private final Map<String, Set<String>> ngramDatabase;
+    private final Map<String, Integer> documentSizes;
+
+    public PlagiarismDetector(int nGramSize) {
+        this.nGramSize = nGramSize;
+        this.ngramDatabase = new HashMap<>();
+        this.documentSizes = new HashMap<>();
+    }
+
+    private List<String> generateNGrams(String text) {
+        String[] words = text.toLowerCase().replaceAll("[^a-z0-9\\s]", "").split("\\s+");
+        List<String> ngrams = new ArrayList<>();
+        
+        if (words.length < nGramSize) {
+            return ngrams;
+        }
+
+        for (int i = 0; i <= words.length - nGramSize; i++) {
+            StringBuilder sb = new StringBuilder();
+            for (int j = 0; j < nGramSize; j++) {
+                sb.append(words[i + j]);
+                if (j < nGramSize - 1) {
+                    sb.append(" ");
+                }
+            }
+            ngrams.add(sb.toString());
+        }
+        return ngrams;
+    }
+
+    public void addDocument(String docId, String text) {
+        List<String> ngrams = generateNGrams(text);
+        documentSizes.put(docId, ngrams.size());
+
+        for (String ngram : ngrams) {
+            ngramDatabase.computeIfAbsent(ngram, k -> new HashSet<>()).add(docId);
+        }
+    }
+
+    public void analyzeDocument(String newDocId, String text) {
+        List<String> ngrams = generateNGrams(text);
+        System.out.println("analyzeDocument(\"" + newDocId + "\")");
+        System.out.println("-> Extracted " + ngrams.size() + " n-grams");
+
+        Map<String, Integer> matchCounts = new HashMap<>();
+
+        for (String ngram : ngrams) {
+            Set<String> matchingDocs = ngramDatabase.get(ngram);
+            if (matchingDocs != null) {
+                for (String docId : matchingDocs) {
+                    matchCounts.put(docId, matchCounts.getOrDefault(docId, 0) + 1);
+                }
+            }
+        }
+
+        for (Map.Entry<String, Integer> entry : matchCounts.entrySet()) {
+            String docId = entry.getKey();
+            int matches = entry.getValue();
+            double similarity = (matches * 100.0) / ngrams.size();
+
+            System.out.print("-> Found " + matches + " matching n-grams with \"" + docId + "\"\n");
+            System.out.print("-> Similarity: " + String.format("%.1f", similarity) + "% ");
+            
+            if (similarity > 50.0) {
+                System.out.println("(PLAGIARISM DETECTED)");
+            } else if (similarity > 10.0) {
+                System.out.println("(suspicious)");
+            } else {
+                System.out.println("(clean)");
+            }
+        }
+    }
+
+    public static void main(String[] args) {
+        PlagiarismDetector detector = new PlagiarismDetector(5);
+
+        StringBuilder doc89 = new StringBuilder();
+        for (int i = 0; i < 90; i++) doc89.append("this is a unique sentence for doc eighty nine ");
+        detector.addDocument("essay_089.txt", doc89.toString());
+
+        StringBuilder doc92 = new StringBuilder();
+        for (int i = 0; i < 63; i++) doc92.append("the quick brown fox jumps over the lazy dog ");
+        detector.addDocument("essay_092.txt", doc92.toString());
+
+        StringBuilder doc123 = new StringBuilder();
+        for (int i = 0; i < 15; i++) doc123.append("this is a unique sentence for doc eighty nine ");
+        for (int i = 0; i < 63; i++) doc123.append("the quick brown fox jumps over the lazy dog ");
+        
+        detector.analyzeDocument("essay_123.txt", doc123.toString());
+    }
+}
