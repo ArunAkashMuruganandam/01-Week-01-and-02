@@ -1,0 +1,106 @@
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.PriorityQueue;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+class PageEvent {
+    String url;
+    String userId;
+    String source;
+
+    public PageEvent(String url, String userId, String source) {
+        this.url = url;
+        this.userId = userId;
+        this.source = source;
+    }
+}
+
+class PageStats implements Comparable<PageStats> {
+    String url;
+    long views;
+
+    public PageStats(String url, long views) {
+        this.url = url;
+        this.views = views;
+    }
+
+    @Override
+    public int compareTo(PageStats other) {
+        return Long.compare(this.views, other.views);
+    }
+}
+
+public class AnalyticsDashboard {
+
+    private final Map<String, AtomicLong> pageViews = new ConcurrentHashMap<>();
+    private final Map<String, Set<String>> uniqueVisitors = new ConcurrentHashMap<>();
+    private final Map<String, AtomicLong> trafficSources = new ConcurrentHashMap<>();
+    private final AtomicLong totalEvents = new AtomicLong(0);
+
+    public void processEvent(PageEvent event) {
+        pageViews.computeIfAbsent(event.url, k -> new AtomicLong(0)).incrementAndGet();
+        
+        uniqueVisitors.computeIfAbsent(event.url, k -> ConcurrentHashMap.newKeySet()).add(event.userId);
+        
+        trafficSources.computeIfAbsent(event.source, k -> new AtomicLong(0)).incrementAndGet();
+        
+        totalEvents.incrementAndGet();
+    }
+
+    public void getDashboard() {
+        System.out.println("Top Pages:");
+        
+        PriorityQueue<PageStats> topPages = new PriorityQueue<>(10);
+        for (Map.Entry<String, AtomicLong> entry : pageViews.entrySet()) {
+            topPages.offer(new PageStats(entry.getKey(), entry.getValue().get()));
+            if (topPages.size() > 10) {
+                topPages.poll();
+            }
+        }
+
+        List<PageStats> sortedTop = new ArrayList<>();
+        while (!topPages.isEmpty()) {
+            sortedTop.add(0, topPages.poll());
+        }
+
+        int rank = 1;
+        for (PageStats stats : sortedTop) {
+            int uniqueCount = uniqueVisitors.get(stats.url).size();
+            System.out.println(rank + ". " + stats.url + " - " + stats.views + " views (" + uniqueCount + " unique)");
+            rank++;
+        }
+
+        System.out.println("\nTraffic Sources:");
+        long total = totalEvents.get();
+        List<String> sourceStats = new ArrayList<>();
+        
+        for (Map.Entry<String, AtomicLong> entry : trafficSources.entrySet()) {
+            double percentage = total == 0 ? 0 : (entry.getValue().get() * 100.0) / total;
+            sourceStats.add(entry.getKey() + ": " + String.format("%.0f%%", percentage));
+        }
+        
+        System.out.println(String.join(", ", sourceStats));
+        System.out.println();
+    }
+
+    public static void main(String[] args) {
+        AnalyticsDashboard dashboard = new AnalyticsDashboard();
+
+        dashboard.processEvent(new PageEvent("/article/breaking-news", "user_123", "Google"));
+        dashboard.processEvent(new PageEvent("/article/breaking-news", "user_456", "Facebook"));
+        dashboard.processEvent(new PageEvent("/sports/championship", "user_789", "Direct"));
+        
+        for (int i = 0; i < 15421; i++) {
+            dashboard.processEvent(new PageEvent("/article/breaking-news", "user_rand_" + i, "Google"));
+        }
+        
+        for (int i = 0; i < 12090; i++) {
+            dashboard.processEvent(new PageEvent("/sports/championship", "user_rand_sports_" + (i % 9870), "Direct"));
+        }
+
+        dashboard.getDashboard();
+    }
+}
