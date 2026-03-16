@@ -1,0 +1,120 @@
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
+
+class DNSEntry {
+    String ipAddress;
+    long expiryTime;
+
+    public DNSEntry(String ipAddress, long ttlMillis) {
+        this.ipAddress = ipAddress;
+        this.expiryTime = System.currentTimeMillis() + ttlMillis;
+    }
+
+    public boolean isExpired() {
+        return System.currentTimeMillis() > expiryTime;
+    }
+}
+
+public class DNSCache {
+    private final int capacity;
+    private final LinkedHashMap<String, DNSEntry> cache;
+    private final ScheduledExecutorService backgroundCleaner;
+
+    private final AtomicLong hits = new AtomicLong(0);
+    private final AtomicLong misses = new AtomicLong(0);
+    private final AtomicLong totalLookupTimeNs = new AtomicLong(0);
+
+    public DNSCache(int capacity) {
+        this.capacity = capacity;
+        
+        this.cache = new LinkedHashMap<String, DNSEntry>(capacity, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, DNSEntry> eldest) {
+                return size() > DNSCache.this.capacity;
+            }
+        };
+
+        this.backgroundCleaner = Executors.newSingleThreadScheduledExecutor();
+        this.backgroundCleaner.scheduleAtFixedRate(this::removeExpiredEntries, 1, 1, TimeUnit.SECONDS);
+    }
+
+    public String resolve(String domain) {
+        long startTime = System.nanoTime();
+        String ip = null;
+
+        synchronized (cache) {
+            DNSEntry entry = cache.get(domain);
+
+            if (entry != null) {
+                if (entry.isExpired()) {
+                    cache.remove(domain);
+                    entry = null;
+                }
+            }
+
+            if (entry != null) {
+                hits.incrementAndGet();
+                ip = entry.ipAddress;
+            } else {
+                misses.incrementAndGet();
+                ip = queryUpstreamDNS(domain);
+                cache.put(domain, new DNSEntry(ip, 3000));
+            }
+        }
+
+        totalLookupTimeNs.addAndGet(System.nanoTime() - startTime);
+        return ip;
+    }
+
+    private String queryUpstreamDNS(String domain) {
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return "172.217.14." + (int) (Math.random() * 255);
+    }
+
+    private void removeExpiredEntries() {
+        synchronized (cache) {
+            cache.entrySet().removeIf(entry -> entry.getValue().isExpired());
+        }
+    }
+
+    public String getCacheStats() {
+        long totalQueries = hits.get() + misses.get();
+        double hitRate = totalQueries == 0 ? 0 : (hits.get() * 100.0) / totalQueries;
+        double avgTimeMs = totalQueries == 0 ? 0 : (totalLookupTimeNs.get() / (double) totalQueries) / 1_000_000.0;
+        
+        return String.format("Hit Rate: %.1f%%, Avg Lookup Time: %.2fms", hitRate, avgTimeMs);
+    }
+
+    public void shutdown() {
+        backgroundCleaner.shutdown();
+    }
+
+    public static void main(String[] args) throws Exception {
+        DNSCache dns = new DNSCache(2);
+
+        System.out.println("resolve(\"google.com\") -> " + dns.resolve("google.com"));
+        
+        System.out.println("resolve(\"google.com\") -> " + dns.resolve("google.com"));
+        
+        System.out.println("resolve(\"github.com\") -> " + dns.resolve("github.com"));
+        
+        System.out.println("resolve(\"stackoverflow.com\") -> " + dns.resolve("stackoverflow.com"));
+        
+        Thread.sleep(3100);
+        System.out.println("... after 3.1 seconds ...");
+        
+        System.out.println("resolve(\"google.com\") -> " + dns.resolve("google.com"));
+
+        System.out.println("getCacheStats() -> " + dns.getCacheStats());
+
+        dns.shutdown();
+    }
+}
